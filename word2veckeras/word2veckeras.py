@@ -4,7 +4,7 @@
 # Licensed under the GNU Affero General Public License, version 3 - http://www.gnu.org/licenses/agpl-3.0.html
 
 import math
-from Queue import Queue
+from queue import Queue
 
 from numpy import zeros, random, sum as np_sum, add as np_add, concatenate, \
     repeat as np_repeat, array, float32 as REAL, empty, ones, memmap as np_memmap, \
@@ -51,9 +51,9 @@ def train_sg_pair(model, word, context_index, alpha=None, learn_vectors=True, le
                   scale=1
                   ):
 
-    if word not in model.vocab:
+    if word not in model.wv.vocab:
         return
-    predict_word = model.vocab[word]  # target word (NN output)
+    predict_word = model.wv.vocab[word]  # target word (NN output)
     if model.hs:
         for i,p in enumerate(predict_word.point):
             yield context_index,p,predict_word.code[i]
@@ -77,15 +77,15 @@ def train_batch_sg(model, sentences, alpha=None, work=None,sub_batch_size=256,ba
 
     while 1:
         for sentence in sentences:
-            word_vocabs = [model.vocab[w] for w in sentence if w in model.vocab and
-                           model.vocab[w].sample_int > model.random.rand() * 2**32]
+            word_vocabs = [model.wv.vocab[w] for w in sentence if w in model.wv.vocab and
+                           model.wv.vocab[w].sample_int > model.random.rand() * 2**32]
             for pos, word in enumerate(word_vocabs):
                 reduced_window = model.random.randint(model.window)  # `b` in the original word2vec code
 
                 # now go over all words from the (reduced) window, predicting each one in turn
                 start = max(0, pos - model.window + reduced_window)
                 #window_length=len(word_vocabs[start:(pos + model.window + 1 - reduced_window)])
-                #print window_length,
+                #print(window_length,)
                 for pos2, word2 in enumerate(word_vocabs[start:(pos + model.window + 1 - reduced_window)], start):
                     # don't train on the `word` itself
                     if pos2 != pos:
@@ -142,7 +142,7 @@ def train_cbow_pair(model, word, input_word_indices, l=None, alpha=None, learn_v
 
 def train_batch_cbow_xy_generator(model, sentences):
     for sentence in sentences:
-        word_vocabs = [model.vocab[w] for w in sentence if w in model.vocab and  model.vocab[w].sample_int > model.random.rand() * 2**32]
+        word_vocabs = [model.wv.vocab[w] for w in sentence if w in model.wv.vocab and  model.wv.vocab[w].sample_int > model.random.rand() * 2**32]
         for pos, word in enumerate(word_vocabs):
             reduced_window = model.random.randint(model.window)  # `b` in the original word2vec code
             start = max(0, pos - model.window + reduced_window)
@@ -184,7 +184,7 @@ def build_keras_model_cbow(index_size,vector_size,
     kerasmodel = Graph()
     kerasmodel.add_input(name='point' , input_shape=(sub_batch_size,), dtype='int')
     kerasmodel.add_input(name='index' , input_shape=(1,), dtype='int')
-    kerasmodel.add_node(Embedding(index_size, vector_size, weights=[model.syn0]),name='embedding', input='index')
+    kerasmodel.add_node(Embedding(index_size, vector_size, weights=[model.wv.syn0]),name='embedding', input='index')
     kerasmodel.add_node(Embedding(context_size, vector_size, input_length=sub_batch_size,weights=[model.keras_syn1]),name='embedpoint', input='point')
     if cbow_mean:
         kerasmodel.add_node(Lambda(lambda x:x.mean(1),output_shape=(vector_size,)),name='average',input='embedding')
@@ -255,17 +255,17 @@ def copy_word2vec_instance_from_to(w2v,w2v_to,sentences=None,documents=None):# ,
         #self.train(docs,learn_words=learn_words,**kwargs)
 
 
-def train_prepossess(model):
+def train_preprocess(model):
     
-    vocab_size=len(model.vocab)
+    vocab_size=len(model.wv.vocab)
 
     if model.negative>0 and model.hs :
-        model.keras_context_negative_base_index=len(model.vocab)
-        model.keras_context_index_size=len(model.vocab)*2
+        model.keras_context_negative_base_index=vocab_size
+        model.keras_context_index_size=vocab_size*2
         model.keras_syn1=np.vstack((model.syn1,model.syn1neg))
     else:
         model.keras_context_negative_base_index=0
-        model.keras_context_index_size=len(model.vocab)
+        model.keras_context_index_size=vocab_size
         if model.hs :
             model.keras_syn1=model.syn1
         else:
@@ -278,15 +278,15 @@ def train_prepossess(model):
         model.neg_labels[0] = 1
 
     trim_rule=None
-    if len(model.vocab) == 0 : #not hasattr(model, 'syn0'):
-        print 'build_vocab'
+    if vocab_size == 0 : #not hasattr(model, 'syn0'):
+        print('build_vocab')
         model.build_vocab(sentences, trim_rule=trim_rule)
-        #print model.syn0
+        #print(model.syn0)
     
 
     model.word_context_size_max=0
     if model.hs :
-        model.word_context_size_max += max(len(model.vocab[w].point) for w in model.vocab if hasattr(model.vocab[w],'point'))
+        model.word_context_size_max += max(len(model.wv.vocab[w].point) for w in model.wv.vocab if hasattr(model.wv.vocab[w],'point'))
     if model.negative > 0:
         model.word_context_size_max += model.negative + 1
 
@@ -300,14 +300,14 @@ def train_prepossess(model):
 class Word2VecKeras(gensim.models.word2vec.Word2Vec):
 
     def compare_w2v(self,w2v2):
-        return np.mean([np.linalg.norm(self[w]-w2v2[w]) for w in self.vocab if w in w2v2.vocab])
+        return np.mean([np.linalg.norm(self[w]-w2v2[w]) for w in self.wv.vocab if w in w2v2.wv.vocab])
 
     def train(self, sentences, total_words=None, word_count=0,
-               total_examples=None, queue_factor=2, report_delay=1,
+               total_examples=None, queue_factor=2, report_delay=1,epochs=5,start_alpha=0.05,end_alpha=0.005,compute_loss=True,
                batch_size=128 #512 #256
                ,sub_batch_size=16 #32 #128 #128  #256 #128 #512 #256 #1
               ):
-        train_prepossess(self)
+        train_preprocess(self)
         
         # if self.negative>0 and self.hs :
         #     self.keras_context_negative_base_index=len(self.vocab)
@@ -330,9 +330,9 @@ class Word2VecKeras(gensim.models.word2vec.Word2Vec):
         
         # trim_rule=None
         # if len(self.vocab) == 0 : #not hasattr(self, 'syn0'):
-        #     print 'build_vocab'
+        #     print('build_vocab')
         #     self.build_vocab(sentences, trim_rule=trim_rule)
-        #     #print self.syn0
+        #     #print(self.syn0)
         # word_context_size_max=0
         # if self.hs :
         #     word_context_size_max += max(len(self.vocab[w].point) for w in self.vocab if hasattr(self.vocab[w],'point'))
@@ -340,7 +340,7 @@ class Word2VecKeras(gensim.models.word2vec.Word2Vec):
         #     word_context_size_max += self.negative + 1
 
 
-        vocab_size=len(self.vocab)
+        vocab_size=len(self.wv.vocab)
         
         sub_batch_size_update=False
         if hasattr(self,'sub_batch_size'):
@@ -386,7 +386,7 @@ class Word2VecKeras(gensim.models.word2vec.Word2Vec):
 
 if __name__ == "__main__":
     def compare_w2v(w2v1,w2v2):
-        return np.mean([np.linalg.norm(w2v1[w]-w2v2[w]) for w in w2v1.vocab if w in w2v2.vocab])
+        return np.mean([np.linalg.norm(w2v1[w]-w2v2[w]) for w in w2v1.vocab if w in w2v2.wv.vocab])
     
     input_file = 'test.txt'
     sents=gensim.models.word2vec.LineSentence(input_file)
@@ -404,12 +404,12 @@ if __name__ == "__main__":
 
     vs1 = gensim.models.word2vec.Word2Vec(sents,hs=hs,negative=negative,sg=sg_v,size=v_size,iter=v_iter)
     vsk1 = Word2VecKeras(sents,hs=hs,negative=negative,sg=sg_v,size=v_size,iter=v_iter)
-    print 'compare',vsk1.compare_w2v(vs1)
+    print('compare',vsk1.compare_w2v(vs1))
     vsk1.iter=20
     vsk1.train(sents,batch_size=100,sub_batch_size=64)
-    print 'compare',vsk1.compare_w2v(vs1)
-    print vs1['the']
-    print vsk1['the']
+    print('compare',vsk1.compare_w2v(vs1))
+    print(vs1['the'])
+    print(vsk1['the'])
     print( vs1.most_similar('the', topn=topn))
     print( vsk1.most_similar('the', topn=topn))
 
@@ -424,19 +424,19 @@ if __name__ == "__main__":
     br = gensim.models.word2vec.Word2Vec(brown_sents,hs=1,negative=0,sg=sg_v,iter=v_iter)
     brk =Word2VecKeras(brown_sents,hs=1,negative=0,sg=sg_v,iter=v_iter)
 
-    print 'compare',brk.compare_w2v(br)
+    print('compare',brk.compare_w2v(br))
     brk.train(brown_sents)
-    print 'compare',brk.compare_w2v(br)
-    print brk.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn)
+    print('compare',brk.compare_w2v(br))
+    print(brk.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn))
 
     br_dummy = gensim.models.word2vec.Word2Vec(brown_sents,sg=sg_v,iter=1)
     copy_word2vec_instance_from_to(brk,br_dummy)
-    print br_dummy.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn)
+    print(br_dummy.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn))
     print(br_dummy.most_similar('the', topn=5))
 
-    print br.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn)
-    print brk.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn)
-    #print brk.most_similar('the', topn=5)
+    print(br.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn))
+    print(brk.most_similar_cosmul(positive=['she', 'him'], negative=['he'], topn=topn))
+    #print(brk.most_similar('the', topn=5))
     #print(brk.most_similar('the', topn=5))
     
     

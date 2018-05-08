@@ -5,7 +5,7 @@
 
 import math
 import copy
-from Queue import Queue
+from queue import Queue
 
 from numpy import zeros, random, sum as np_sum, add as np_add, concatenate, \
     repeat as np_repeat, array, float32 as REAL, empty, ones, memmap as np_memmap, \
@@ -35,7 +35,7 @@ from keras.objectives import mse
 from sklearn.base import BaseEstimator,RegressorMixin, ClassifierMixin
 from sklearn.linear_model import LogisticRegression,LogisticRegressionCV
 
-from word2veckeras import train_sg_pair,train_cbow_pair,queue_to_list,train_prepossess
+from word2veckeras import train_sg_pair,train_cbow_pair,queue_to_list,train_preprocess
 
 
 def train_batch_dbow(model,
@@ -71,8 +71,8 @@ def train_batch_dm_xy_generator(model, docs):
         indexed_doctags = model.docvecs.indexed_doctags(doc.tags)
         doctag_indexes, doctag_vectors, doctag_locks, ignored = indexed_doctags
 
-        word_vocabs = [model.vocab[w] for w in doc.words if w in model.vocab and
-                           model.vocab[w].sample_int > model.random.rand() * 2**32]
+        word_vocabs = [model.wv.vocab[w] for w in doc.words if w in model.wv.vocab and
+                           model.wv.vocab[w].sample_int > model.random.rand() * 2**32]
         for pos, word in enumerate(word_vocabs):
             reduced_window = model.random.randint(model.window)  # `b` in the original doc2vec code
             start = max(0, pos - model.window + reduced_window)
@@ -111,9 +111,9 @@ def train_document_dm_concat_xy_generator(model, docs):
         indexed_doctags = model.docvecs.indexed_doctags(doc.tags)
         doctag_indexes, doctag_vectors, doctag_locks, ignored = indexed_doctags
 
-        word_vocabs = [model.vocab[w] for w in doc.words if w in model.vocab and
-                       model.vocab[w].sample_int > model.random.rand() * 2**32]
-        null_word = model.vocab['\0']
+        word_vocabs = [model.wv.vocab[w] for w in doc.words if w in model.wv.vocab and
+                       model.wv.vocab[w].sample_int > model.random.rand() * 2**32]
+        null_word = model.wv.vocab['\0']
         pre_pad_count = model.window
         post_pad_count = model.window
         padded_document_indexes = (
@@ -127,7 +127,7 @@ def train_document_dm_concat_xy_generator(model, docs):
                 padded_document_indexes[(pos - pre_pad_count): pos]  # preceding words
                 + padded_document_indexes[(pos + 1):(pos + 1 + post_pad_count)]  # following words
             )
-            predict_word = model.vocab[model.index2word[padded_document_indexes[pos]]]
+            predict_word = model.wv.vocab[model.index2word[padded_document_indexes[pos]]]
             xy_gen = train_cbow_pair(model, predict_word, word_context_indexes)
             for xy in xy_gen:
                 if xy !=None:
@@ -306,7 +306,8 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
               #batch_size=800,
               learn_doctags=True, learn_words=True, learn_hidden=True,iter=None,
               batch_size=128 #128, #512 #256
-              ,sub_batch_size=128 #16 #32 #128 #128  #256 #128 #512 #256 #1
+              ,sub_batch_size=128, #16 #32 #128 #128  #256 #128 #512 #256 #1
+              total_examples=None, epochs=5, start_alpha=0.05, end_alpha=0.005, callbacks=None
               ):
         
         if iter!=None:
@@ -314,7 +315,7 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
         if docs==None:
             docs=self.docvecs
             
-        train_prepossess(self)
+        train_preprocess(self)
         
         # if self.negative>0 and self.hs :
         #     self.keras_context_negative_base_index=len(self.vocab)
@@ -341,7 +342,7 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
         # if self.negative > 0:
         #     word_context_size_max += self.negative + 1
 
-        vocab_size=len(self.vocab)
+        vocab_size=len(self.wv.vocab)
         index_size=len(self.docvecs)
 
             
@@ -359,7 +360,7 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
                                                    sub_batch_size=sub_batch_size
                                                    )
             gen=train_batch_dbow(self, docs, sub_batch_size=sub_batch_size,batch_size=batch_size)
-            self.kerasmodel.fit_generator(gen,samples_per_epoch=samples_per_epoch, nb_epoch=self.iter,verbose=0)
+            self.kerasmodel.fit_generator(gen,samples_per_epoch=samples_per_epoch, nb_epoch=self.iter,verbose=1)
         else:
             if self.dm_concat:
                 samples_per_epoch=int(self.word_context_size_max*sum(map(len,docs)))
@@ -373,7 +374,7 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
                                                             doctag_vectors=self.docvecs.doctag_syn0
                                                             )
                 gen= train_document_dm_concat(self, docs, batch_size=batch_size)
-                self.kerasmodel.fit_generator(gen,samples_per_epoch=samples_per_epoch, nb_epoch=self.iter, verbose=0)
+                self.kerasmodel.fit_generator(gen,samples_per_epoch=samples_per_epoch, nb_epoch=self.iter, verbose=1)
                 self.syn0=self.kerasmodel.nodes['embedword'].get_weights()[0]
             else:
                 samples_per_epoch=int(self.word_context_size_max*sum(map(len,docs)))
@@ -389,13 +390,16 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
                                                      )
 
                 gen=train_batch_dm(self, docs, batch_size=batch_size)
-                self.kerasmodel.fit_generator(gen,samples_per_epoch=samples_per_epoch, nb_epoch=self.iter,verbose=0)
+                self.kerasmodel.fit_generator(gen,samples_per_epoch=samples_per_epoch, nb_epoch=self.iter,verbose=1)
                 self.syn0=self.kerasmodel.nodes['embedword'].get_weights()[0]
-        self.docvecs.doctag_syn0=self.kerasmodel.nodes['embedindex'].get_weights()[0]
+       
+        num_docs=self.docvecs.doctag_syn0.shape[0]
+        for row in list(range(num_docs)):
+            self.docvecs.doctag_syn0[row,:]=self.kerasmodel.nodes['embedindex'].get_weights()[0][row,:]
         if self.negative>0 and self.hs :
             syn1tmp=self.kerasmodel.nodes['embedpoint'].get_weights()[0]
-            self.syn1=syn1tmp[0:len(self.vocab)]
-            self.syn1neg=syn1tmp[len(self.vocab):2*len(self.vocab)]
+            self.syn1=syn1tmp[0:len(self.wv.vocab)]
+            self.syn1neg=syn1tmp[len(self.wv.vocab):2*len(self.wv.vocab)]
         elif self.hs:
             self.syn1=self.kerasmodel.nodes['embedpoint'].get_weights()[0]
         else:
@@ -411,9 +415,9 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
     #     samples_per_epoch=int(self.window*2*sum(map(len,docs)))
         
     #     count_max= steps * samples_per_epoch/batch_size +steps
-    #     #print 'count_max',count_max
-    #     # print self.kerasmodel_infer.nodes['embedword'].get_weights()
-    #     # print self.kerasmodel_infer.nodes[ 'sigmoid'].get_weights()
+    #     #print('count_max',count_max)
+    #     # print(self.kerasmodel_infer.nodes['embedword'].get_weights())
+    #     # print(self.kerasmodel_infer.nodes[ 'sigmoid'].get_weights())
 
     #     doctag_vectors = empty((1, self.vector_size), dtype=REAL)
     #     doctag_vectors[0] = self.seeded_vector(' '.join(doc_words))
@@ -473,7 +477,7 @@ class Doc2VecKeras(gensim.models.doc2vec.Doc2Vec):
         self.index2word=w2v.index2word
         self.sorted_vocab = w2v.sorted_vocab
 
-        self.vocab=w2v.vocab
+        self.wv.vocab=w2v.vocab
 
         self.max_vocab_size = w2v.max_vocab_size
 
@@ -531,7 +535,7 @@ class SentenceClassifier(BaseEstimator, ClassifierMixin):
         argdict.pop('argdict',None)
         argdict.pop('self',None)
         vars(self).update(argdict)
-        #print argdict
+        #print(argdict)
     
     def fit(self, X, y):
         self.sents_train=X
@@ -539,7 +543,7 @@ class SentenceClassifier(BaseEstimator, ClassifierMixin):
         return self
     
     def doc2vec_set(self,all_docs):
-        #print 'doc2vec_set,SentenceClassifier'
+        #print('doc2vec_set,SentenceClassifier')
         if hasattr(self.doc2vec, 'syn0'):
             self.doc2vec.reset_weights()
             #del self.doc2vec.syn0
@@ -563,7 +567,7 @@ class SentenceClassifier(BaseEstimator, ClassifierMixin):
         all_docs = list(LabeledListSentence(self.sents_all))
         
         self.doc2vec_set(all_docs)
-        #print 'size',self.doc2vec.vector_size
+        #print('size',self.doc2vec.vector_size)
 
         self.X_train= [self.doc2vec.infer_vector(s) for s in self.sents_train]
         self.X_test= [self.doc2vec.infer_vector(s) for s in self.sents_test]
@@ -602,10 +606,10 @@ class Doc2VecClassifier(SentenceClassifier):
         vars(self).update(argdict)
         
     def doc2vec_set(self,all_docs):
-        #print 'doc2vec_set,Doc2VecClassifier'
+        #print('doc2vec_set,Doc2VecClassifier')
         doc2vec_init_dict={k:vars(self)[k] for k in vars(self).keys()  if k in doc2vec_init_param_dict}
         doc2vec_init_dict['documents']=all_docs
-        #print doc2vec_init_dict
+        #print(doc2vec_init_dict)
         self.doc2vec=gensim.models.doc2vec.Doc2Vec(**doc2vec_init_dict)
             
     
@@ -620,9 +624,9 @@ if __name__ == "__main__":
         doc_words1=d.words
         break;
     d_size=5
-    dv1=Doc2VecKeras(                doc1,size=d_size,dm=0,dm_concat=1,hs=0,negative=5,iter=1)
-    dvk1=gensim.models.doc2vec.Doc2Vec(doc1,size=d_size,dm=0,dm_concat=1,hs=0,negative=5,iter=1)
+    dv1=Doc2VecKeras(                doc1,size=d_size,dm=0,dm_concat=1,hs=0,negative=5,iter=5)
+    dvk1=gensim.models.doc2vec.Doc2Vec(doc1,size=d_size,dm=0,dm_concat=1,hs=0,negative=5,iter=5)
 
-    print dv1.docvecs[0]
-    print dvk1.docvecs[0]
+    print(dv1.docvecs[0])
+    print(dvk1.docvecs[0])
     

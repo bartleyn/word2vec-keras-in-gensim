@@ -15,9 +15,9 @@ for param in ParameterGrid(parameters):
     if (param['hs']==0 and param['negative']==0) or (param['dm']==0 and param['dm_concat']==0) :
         continue
     
-    print param
+    print(param)
     dvk=Doc2VecKeras(doc1,**param)
     dv =gensim.models.doc2vec.Doc2Vec(doc1,**param)
-    print compare_d2v(dv,dvk)
+    print(compare_d2v(dv,dvk))
 
 
